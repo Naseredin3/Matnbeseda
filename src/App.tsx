@@ -8,6 +8,9 @@ import { TipsCard } from "./components/TipsCard";
 import { AudioHistoryItem } from "./types";
 import { AlertCircle, X, Play, Square, KeyRound } from "lucide-react";
 import { speakPersianBrowser, stopBrowserSpeech } from "./utils/browserSpeech";
+import { PermanentKeyModal } from "./components/PermanentKeyModal";
+import { getPermanentApiKey, hasPermanentApiKey } from "./utils/apiKeyManager";
+import { synthesizeGeminiDirect } from "./utils/directGeminiSpeech";
 
 const INITIAL_PERSIAN_TEXT =
   "سلام و درود! به سامانه تبدیل هوشمند متن به گفتار فارسی سلیس و روان خوش آمدید. هر متنی را اینجا بنویسید تا با لحنی رسا، طبیعی و کیفیت استودیویی خوانده شود.";
@@ -24,6 +27,10 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isAuthError, setIsAuthError] = useState<boolean>(false);
   const [isBrowserSpeakingFallback, setIsBrowserSpeakingFallback] = useState<boolean>(false);
+
+  // Permanent API Key modal & status
+  const [isKeyModalOpen, setIsKeyModalOpen] = useState<boolean>(false);
+  const [hasPermanentKey, setHasPermanentKey] = useState<boolean>(() => hasPermanentApiKey());
 
   // Active audio playing state
   const [activeAudioData, setActiveAudioData] = useState<string | null>(null);
@@ -80,11 +87,14 @@ export default function App() {
     setErrorMessage(null);
     setIsAuthError(false);
 
+    const permanentKey = getPermanentApiKey();
+
     try {
       const response = await fetch("/api/tts", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...(permanentKey ? { "x-gemini-key": permanentKey } : {}),
         },
         body: JSON.stringify({
           text: text.trim(),
@@ -94,13 +104,56 @@ export default function App() {
         }),
       });
 
-      const data = await response.json();
+      let data: any = null;
+      try {
+        data = await response.json();
+      } catch {
+        // Not JSON
+      }
 
-      if (!response.ok || data.error) {
-        if (data.isAuthError || response.status === 401 || response.status === 403) {
+      if (!response.ok || !data || data.error) {
+        if (data?.isAuthError || response.status === 401 || response.status === 403) {
           setIsAuthError(true);
         }
-        throw new Error(data.error || "خطا در برقراری ارتباط با سرور TTS");
+
+        // If permanent key is configured and server failed, try direct client synthesis
+        if (permanentKey) {
+          try {
+            const directResult = await synthesizeGeminiDirect(
+              text.trim(),
+              selectedVoice,
+              selectedStyle,
+              speed,
+              permanentKey
+            );
+            setActiveAudioData(directResult.audioData);
+            setActiveSpokenText(text.trim());
+            setActiveVoiceUsed(directResult.voiceUsed);
+            setActiveStyleUsed(selectedStyle);
+
+            const newItem: AudioHistoryItem = {
+              id: Date.now().toString(),
+              text: text.trim(),
+              voiceName: directResult.voiceUsed,
+              style: selectedStyle,
+              speed: speed,
+              audioData: directResult.audioData,
+              mimeType: directResult.mimeType || "audio/wav",
+              createdAt: new Date().toLocaleTimeString("fa-IR", {
+                hour: "2-digit",
+                minute: "2-digit",
+              }),
+              duration: directResult.durationEstimateSec,
+            };
+
+            setHistory((prev) => [newItem, ...prev.slice(0, 19)]);
+            return;
+          } catch (directErr: any) {
+            console.error("Direct synthesis error:", directErr);
+          }
+        }
+
+        throw new Error(data?.error || "خطا در برقراری ارتباط با موتور تبدیل صوت");
       }
 
       if (!data.audioData) {
@@ -134,6 +187,45 @@ export default function App() {
       setHistory((prev) => [newItem, ...prev.slice(0, 19)]);
     } catch (err: any) {
       console.error("TTS generation error:", err);
+
+      // Mobile APK offline / network fetch error fallback
+      if (permanentKey && (err.name === "TypeError" || String(err).includes("fetch") || String(err).includes("Failed"))) {
+        try {
+          const directResult = await synthesizeGeminiDirect(
+            text.trim(),
+            selectedVoice,
+            selectedStyle,
+            speed,
+            permanentKey
+          );
+          setActiveAudioData(directResult.audioData);
+          setActiveSpokenText(text.trim());
+          setActiveVoiceUsed(directResult.voiceUsed);
+          setActiveStyleUsed(selectedStyle);
+
+          const newItem: AudioHistoryItem = {
+            id: Date.now().toString(),
+            text: text.trim(),
+            voiceName: directResult.voiceUsed,
+            style: selectedStyle,
+            speed: speed,
+            audioData: directResult.audioData,
+            mimeType: directResult.mimeType || "audio/wav",
+            createdAt: new Date().toLocaleTimeString("fa-IR", {
+              hour: "2-digit",
+              minute: "2-digit",
+            }),
+            duration: directResult.durationEstimateSec,
+          };
+
+          setHistory((prev) => [newItem, ...prev.slice(0, 19)]);
+          return;
+        } catch (directErr: any) {
+          setErrorMessage(directErr?.message || "خطا در برقراری ارتباط با مدل صوتی گوگل");
+          return;
+        }
+      }
+
       setErrorMessage(
         err.message || "متأسفانه در تولید صوت خطایی رخ داد. لطفاً مجدداً تلاش نمایید."
       );
@@ -170,7 +262,11 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col selection:bg-indigo-500 selection:text-white" dir="rtl">
-      <Header isLoading={isLoading} />
+      <Header
+        isLoading={isLoading}
+        hasPermanentKey={hasPermanentKey}
+        onOpenKeyModal={() => setIsKeyModalOpen(true)}
+      />
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 space-y-6">
         {/* Error Alert Box */}
@@ -220,12 +316,14 @@ export default function App() {
                 )}
               </button>
 
-              {isAuthError && (
-                <div className="flex items-center gap-1.5 text-xs text-amber-300/90">
-                  <KeyRound className="w-3.5 h-3.5" />
-                  <span>تنظیم کلید معتبر: منوی بالای صفحه &gt; Settings &gt; Secrets</span>
-                </div>
-              )}
+              <button
+                type="button"
+                onClick={() => setIsKeyModalOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-xs font-semibold text-amber-200 transition"
+              >
+                <KeyRound className="w-3.5 h-3.5" />
+                <span>تعیین یا تغییر کلید دائمی هوش مصنوعی</span>
+              </button>
             </div>
           </div>
         )}
@@ -281,6 +379,13 @@ export default function App() {
       <footer className="border-t border-slate-900 bg-slate-950/90 py-4 text-center text-xs text-slate-500">
         <p>توسعه‌یافته با موتور صوتی Gemini 3.1 Flash TTS برای خوانش طبیعی و سلیس زبان فارسی</p>
       </footer>
+
+      {/* Permanent Key Modal */}
+      <PermanentKeyModal
+        isOpen={isKeyModalOpen}
+        onClose={() => setIsKeyModalOpen(false)}
+        onKeySaved={(newKey) => setHasPermanentKey(!!newKey)}
+      />
     </div>
   );
 }

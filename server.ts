@@ -6,10 +6,10 @@ import { createServer as createViteServer } from "vite";
 
 dotenv.config();
 
-function getGeminiClient(): GoogleGenAI {
-  const apiKey = process.env.GEMINI_API_KEY;
+function getGeminiClient(customApiKey?: string): GoogleGenAI {
+  const apiKey = (customApiKey && customApiKey.trim()) || process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) {
-    throw new Error("GEMINI_API_KEY environment variable is not configured");
+    throw new Error("کلید دسترسی Gemini API تنظیم نشده است. لطفاً کلید دائمی خود را در بخش تنظیمات وارد نمایید یا در متغیر محیطی GEMINI_API_KEY قرار دهید.");
   }
   return new GoogleGenAI({
     apiKey,
@@ -117,24 +117,62 @@ async function startServer() {
   app.use(express.json({ limit: "15mb" }));
 
   // Health check endpoint
-  app.get("/api/health", (_req, res) => {
+  app.get("/api/health", (req, res) => {
+    const customKey = (req.headers["x-gemini-key"] as string) || (req.query.key as string);
+    const hasCustomKey = !!(customKey && customKey.trim());
+    const hasEnvKey = !!process.env.GEMINI_API_KEY?.trim();
+
     res.json({
       status: "ok",
-      hasKey: !!process.env.GEMINI_API_KEY,
+      hasKey: hasCustomKey || hasEnvKey,
+      isCustomKeyProvided: hasCustomKey,
+      hasEnvKey: hasEnvKey,
       timestamp: new Date().toISOString(),
     });
+  });
+
+  // Verify API Key validity endpoint
+  app.post("/api/verify-key", async (req, res) => {
+    try {
+      const apiKey = (req.body?.apiKey || req.headers["x-gemini-key"] || process.env.GEMINI_API_KEY) as string;
+      if (!apiKey || !apiKey.trim()) {
+        return res.status(400).json({ valid: false, error: "کلید API وارد نشده است." });
+      }
+
+      const client = new GoogleGenAI({
+        apiKey: apiKey.trim(),
+        httpOptions: { headers: { "User-Agent": "aistudio-build-verify" } },
+      });
+
+      // Quick test call with a light prompt
+      await client.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: [{ parts: [{ text: "ping" }] }],
+      });
+
+      return res.json({ valid: true, message: "کلید دائمی معتبر است و با موفقیت تایید شد." });
+    } catch (err: any) {
+      console.warn("Key verification failed:", err?.message);
+      const parsed = parseGeminiError(err);
+      return res.status(parsed.status).json({
+        valid: false,
+        error: parsed.message,
+        isAuthError: parsed.isAuthError,
+      });
+    }
   });
 
   // Text-To-Speech endpoint using gemini-3.1-flash-tts-preview
   app.post("/api/tts", async (req, res) => {
     try {
-      const { text, voiceName = "Kore", style = "natural", speed = "normal" } = req.body;
+      const { text, voiceName = "Kore", style = "natural", speed = "normal", apiKey: bodyKey } = req.body;
 
       if (!text || typeof text !== "string" || !text.trim()) {
         return res.status(400).json({ error: "متن وارد شده خالی است" });
       }
 
-      const ai = getGeminiClient();
+      const clientKey = (req.headers["x-gemini-key"] as string) || bodyKey;
+      const ai = getGeminiClient(clientKey);
 
       // Formulate Persian speech guidance
       let styleInstruction = "با بیانی کاملاً سلیس، روان، رسا و طبیعی به زبان فارسی";
@@ -253,12 +291,13 @@ async function startServer() {
   // Persian Text Enhancement Helper (Diacritics & Fluency Polish) using gemini-3.7-flash
   app.post("/api/persian/polish", async (req, res) => {
     try {
-      const { text, mode = "fluency" } = req.body;
+      const { text, mode = "fluency", apiKey: bodyKey } = req.body;
       if (!text || typeof text !== "string" || !text.trim()) {
         return res.status(400).json({ error: "متن خالی است" });
       }
 
-      const ai = getGeminiClient();
+      const clientKey = (req.headers["x-gemini-key"] as string) || bodyKey;
+      const ai = getGeminiClient(clientKey);
 
       let systemPrompt = "";
       if (mode === "diacritics") {

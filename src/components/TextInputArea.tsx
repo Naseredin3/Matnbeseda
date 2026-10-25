@@ -21,6 +21,7 @@ import {
   stopBrowserSpeech,
   isBrowserSpeechSupported,
 } from "../utils/browserSpeech";
+import { getPermanentApiKey } from "../utils/apiKeyManager";
 
 interface TextInputAreaProps {
   text: string;
@@ -99,10 +100,14 @@ export const TextInputArea: React.FC<TextInputAreaProps> = ({
     if (!text.trim() || isPolishing) return;
     setIsPolishing(true);
     setPolishMessage("در حال پردازش متن با هوش مصنوعی...");
+    const permKey = getPermanentApiKey();
     try {
       const res = await fetch("/api/persian/polish", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(permKey ? { "x-gemini-key": permKey } : {}),
+        },
         body: JSON.stringify({ text, mode }),
       });
       const data = await res.json();
