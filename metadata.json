@@ -1,0 +1,6 @@
+{
+  "name": "Persian Fluent TTS",
+  "description": "تبدیل متن به گفتار فارسی سلیس و روان با هوش مصنوعی و مدل پیشرفته Gemini TTS",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
