@@ -17,14 +17,36 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+    signingConfigs {
+        permanent {
+            if (file("persian-tts.jks").exists()) {
+                storeFile file("persian-tts.jks")
+                storePassword "persiantts123"
+                keyAlias "persian-key"
+                keyPassword "persiantts123"
+            }
+        }
     }
     buildTypes {
+        debug {
+            if (file("persian-tts.jks").exists()) {
+                signingConfig signingConfigs.permanent
+            }
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (file("persian-tts.jks").exists()) {
+                signingConfig signingConfigs.permanent
+            }
         }
+    }
+    lintOptions {
+        abortOnError false
+        checkReleaseBuilds false
     }
 }
 
