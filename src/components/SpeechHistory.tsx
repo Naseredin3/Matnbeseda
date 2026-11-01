@@ -1,7 +1,7 @@
-import React from "react";
-import { History, Play, Download, Trash2, Clock, Volume2, Sparkles } from "lucide-react";
+import React, { useState } from "react";
+import { History, Play, Download, Trash2, Check, Share2 } from "lucide-react";
 import { AudioHistoryItem } from "../types";
-import { downloadAudioFile } from "../utils/audio";
+import { downloadAudioFile, shareAudioFile, canShareAudioFile } from "../utils/audio";
 
 interface SpeechHistoryProps {
   history: AudioHistoryItem[];
@@ -16,9 +16,30 @@ export const SpeechHistory: React.FC<SpeechHistoryProps> = ({
   onClearHistory,
   onDeleteOne,
 }) => {
+  const [downloadedId, setDownloadedId] = useState<string | null>(null);
+
   if (history.length === 0) {
     return null;
   }
+
+  const handleDownloadItem = async (item: AudioHistoryItem) => {
+    if (!item.audioData) return;
+    const filename = `persian-voice-${item.voiceName}-${item.id}.wav`;
+    const ok = await downloadAudioFile(item.audioData, filename);
+    if (ok) {
+      setDownloadedId(item.id);
+      setTimeout(() => setDownloadedId(null), 2500);
+    }
+  };
+
+  const handleShareItem = async (item: AudioHistoryItem) => {
+    if (!item.audioData) return;
+    const filename = `persian-voice-${item.voiceName}-${item.id}.wav`;
+    const ok = await shareAudioFile(item.audioData, filename, `صوت ${item.voiceName}`);
+    if (!ok) {
+      await downloadAudioFile(item.audioData, filename);
+    }
+  };
 
   return (
     <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl backdrop-blur-sm">
@@ -81,19 +102,35 @@ export const SpeechHistory: React.FC<SpeechHistoryProps> = ({
                 <span className="text-[11px]">پخش</span>
               </button>
 
-              <button
-                type="button"
-                onClick={() =>
-                  downloadAudioFile(
-                    item.audioData,
-                    `persian-voice-${item.voiceName}-${item.id}.wav`
-                  )
-                }
-                className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
-                title="دانلود فایل صوتی"
-              >
-                <Download className="w-3.5 h-3.5" />
-              </button>
+              {canShareAudioFile() && item.audioData && (
+                <button
+                  type="button"
+                  onClick={() => handleShareItem(item)}
+                  className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white transition-colors"
+                  title="اشتراک‌گذاری / ذخیره در گوشی"
+                >
+                  <Share2 className="w-3.5 h-3.5" />
+                </button>
+              )}
+
+              {item.audioData && (
+                <button
+                  type="button"
+                  onClick={() => handleDownloadItem(item)}
+                  className={`p-2 rounded-lg transition-colors ${
+                    downloadedId === item.id
+                      ? "bg-emerald-600 text-white"
+                      : "bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white"
+                  }`}
+                  title="دانلود فایل صوتی"
+                >
+                  {downloadedId === item.id ? (
+                    <Check className="w-3.5 h-3.5" />
+                  ) : (
+                    <Download className="w-3.5 h-3.5" />
+                  )}
+                </button>
+              )}
 
               <button
                 type="button"

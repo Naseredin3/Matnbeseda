@@ -12,6 +12,13 @@ import { PermanentKeyModal } from "./components/PermanentKeyModal";
 import { getPermanentApiKey, hasPermanentApiKey } from "./utils/apiKeyManager";
 import { synthesizeGeminiDirect } from "./utils/directGeminiSpeech";
 
+import {
+  loadStoredAudioHistory,
+  saveAudioHistoryItem,
+  deleteStoredAudioItem,
+  clearAllStoredAudio,
+} from "./utils/audioStorage";
+
 const INITIAL_PERSIAN_TEXT =
   "سلام و درود! به سامانه تبدیل هوشمند متن به گفتار فارسی سلیس و روان خوش آمدید. هر متنی را اینجا بنویسید تا با لحنی رسا، طبیعی و کیفیت استودیویی خوانده شود.";
 
@@ -38,26 +45,24 @@ export default function App() {
   const [activeVoiceUsed, setActiveVoiceUsed] = useState<string>("Fenrir");
   const [activeStyleUsed, setActiveStyleUsed] = useState<string>("natural");
 
-  // Local storage history
-  const [history, setHistory] = useState<AudioHistoryItem[]>(() => {
-    try {
-      const saved = localStorage.getItem("persian_tts_history");
-      if (saved) {
-        return JSON.parse(saved);
-      }
-    } catch {
-      // ignore
-    }
-    return [];
-  });
+  // Unlimited IndexedDB audio history
+  const [history, setHistory] = useState<AudioHistoryItem[]>([]);
 
+  // Load persistent history on mount
   useEffect(() => {
-    try {
-      localStorage.setItem("persian_tts_history", JSON.stringify(history));
-    } catch {
-      // ignore
-    }
-  }, [history]);
+    loadStoredAudioHistory().then((items) => {
+      if (items && items.length > 0) {
+        setHistory(items);
+        // Pre-load latest audio item into player if available
+        if (!activeAudioData && items[0]?.audioData) {
+          setActiveAudioData(items[0].audioData);
+          setActiveSpokenText(items[0].text);
+          setActiveVoiceUsed(items[0].voiceName);
+          setActiveStyleUsed(items[0].style);
+        }
+      }
+    });
+  }, []);
 
   const handleFallbackBrowserSpeech = async () => {
     if (!text.trim()) return;
@@ -146,7 +151,8 @@ export default function App() {
               duration: directResult.durationEstimateSec,
             };
 
-            setHistory((prev) => [newItem, ...prev.slice(0, 19)]);
+            await saveAudioHistoryItem(newItem);
+            setHistory((prev) => [newItem, ...prev.filter((x) => x.id !== newItem.id)]);
             return;
           } catch (directErr: any) {
             console.error("Direct synthesis error:", directErr);
@@ -168,7 +174,7 @@ export default function App() {
       setActiveVoiceUsed(voice);
       setActiveStyleUsed(selectedStyle);
 
-      // Add to history
+      // Add to history and persistent storage
       const newItem: AudioHistoryItem = {
         id: Date.now().toString(),
         text: text.trim(),
@@ -184,7 +190,8 @@ export default function App() {
         duration: data.durationEstimateSec,
       };
 
-      setHistory((prev) => [newItem, ...prev.slice(0, 19)]);
+      await saveAudioHistoryItem(newItem);
+      setHistory((prev) => [newItem, ...prev.filter((x) => x.id !== newItem.id)]);
     } catch (err: any) {
       console.error("TTS generation error:", err);
 
@@ -218,7 +225,8 @@ export default function App() {
             duration: directResult.durationEstimateSec,
           };
 
-          setHistory((prev) => [newItem, ...prev.slice(0, 19)]);
+          await saveAudioHistoryItem(newItem);
+          setHistory((prev) => [newItem, ...prev.filter((x) => x.id !== newItem.id)]);
           return;
         } catch (directErr: any) {
           setErrorMessage(directErr?.message || "خطا در برقراری ارتباط با مدل صوتی گوگل");
@@ -252,12 +260,14 @@ export default function App() {
     setText(item.text);
   };
 
-  const handleClearHistory = () => {
+  const handleClearHistory = async () => {
     setHistory([]);
+    await clearAllStoredAudio();
   };
 
-  const handleDeleteHistoryItem = (id: string) => {
+  const handleDeleteHistoryItem = async (id: string) => {
     setHistory((prev) => prev.filter((item) => item.id !== id));
+    await deleteStoredAudioItem(id);
   };
 
   return (

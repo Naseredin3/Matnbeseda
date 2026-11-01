@@ -12,7 +12,13 @@ import {
   Check,
   Music,
 } from "lucide-react";
-import { base64ToBlobUrl, downloadAudioFile, formatTime } from "../utils/audio";
+import {
+  base64ToBlobUrl,
+  downloadAudioFile,
+  shareAudioFile,
+  canShareAudioFile,
+  formatTime,
+} from "../utils/audio";
 import { VOICES } from "../data/presets";
 
 interface AudioPlayerSectionProps {
@@ -38,7 +44,8 @@ export const AudioPlayerSection: React.FC<AudioPlayerSectionProps> = ({
   const [playbackRate, setPlaybackRate] = useState(1);
   const [isLooping, setIsLooping] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
-  const [copiedLink, setCopiedLink] = useState(false);
+  const [downloadSuccess, setDownloadSuccess] = useState(false);
+  const [isSharing, setIsSharing] = useState(false);
 
   // Generate audio blob URL whenever audioData changes
   useEffect(() => {
@@ -52,7 +59,7 @@ export const AudioPlayerSection: React.FC<AudioPlayerSectionProps> = ({
     setCurrentTime(0);
 
     return () => {
-      URL.revokeObjectURL(url);
+      if (url) URL.revokeObjectURL(url);
     };
   }, [audioData]);
 
@@ -157,10 +164,29 @@ export const AudioPlayerSection: React.FC<AudioPlayerSectionProps> = ({
     }
   };
 
-  const handleDownload = () => {
+  const handleDownload = async () => {
     if (!audioData) return;
     const filename = `persian-voice-${voiceName.toLowerCase()}-${Date.now()}.wav`;
-    downloadAudioFile(audioData, filename);
+    const ok = await downloadAudioFile(audioData, filename);
+    if (ok) {
+      setDownloadSuccess(true);
+      setTimeout(() => setDownloadSuccess(false), 3000);
+    }
+  };
+
+  const handleShare = async () => {
+    if (!audioData || isSharing) return;
+    setIsSharing(true);
+    const filename = `persian-voice-${voiceName.toLowerCase()}-${Date.now()}.wav`;
+    try {
+      const ok = await shareAudioFile(audioData, filename, `صوت ${voiceName}`);
+      if (!ok) {
+        // Fallback to download if user didn't share
+        await downloadAudioFile(audioData, filename);
+      }
+    } finally {
+      setIsSharing(false);
+    }
   };
 
   // Text highlighting progress
@@ -218,14 +244,40 @@ export const AudioPlayerSection: React.FC<AudioPlayerSectionProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
+          {canShareAudioFile() && (
+            <button
+              type="button"
+              onClick={handleShare}
+              disabled={isSharing}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-indigo-200 text-xs font-medium border border-indigo-800/40 transition-all hover:scale-105 active:scale-95"
+              title="ذخیره در فایل‌های گوشی، تلگرام، واتساپ یا اشتراک‌گذاری مستقیم"
+            >
+              <Share2 className="w-3.5 h-3.5 text-indigo-400" />
+              <span>{isSharing ? "در حال ارسال..." : "ذخیره در گوشی / ارسال"}</span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={handleDownload}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-md shadow-indigo-600/30 transition-all hover:scale-105 active:scale-95"
-            title="دانلود فایل صوتی با کیفیت WAV"
+            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-white text-xs font-semibold shadow-md transition-all hover:scale-105 active:scale-95 ${
+              downloadSuccess
+                ? "bg-emerald-600 shadow-emerald-600/30"
+                : "bg-indigo-600 hover:bg-indigo-500 shadow-indigo-600/30"
+            }`}
+            title="دانلود مستقیم فایل صوتی با فرمت استاندارد WAV"
           >
-            <Download className="w-3.5 h-3.5" />
-            <span>دانلود فایل صوتی (WAV)</span>
+            {downloadSuccess ? (
+              <>
+                <Check className="w-3.5 h-3.5 text-white" />
+                <span>فایل دانلود شد!</span>
+              </>
+            ) : (
+              <>
+                <Download className="w-3.5 h-3.5" />
+                <span>دانلود صوتی (WAV)</span>
+              </>
+            )}
           </button>
         </div>
       </div>
