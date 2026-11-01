@@ -110,6 +110,18 @@ function parseGeminiError(err: any): { status: number; message: string; isAuthEr
   };
 }
 
+const audioCache = new Map<string, { buffer: Buffer; mimeType: string; filename: string; timestamp: number }>();
+
+// Periodic cleanup of audio cache items older than 2 hours
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, item] of audioCache.entries()) {
+    if (now - item.timestamp > 7200000) {
+      audioCache.delete(id);
+    }
+  }
+}, 600000);
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -271,7 +283,21 @@ async function startServer() {
         finalMime = "audio/wav";
       }
 
+      // Store in memory cache for robust HTTP attachment download
+      const audioId = `tts_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const downloadFilename = `persian-voice-${selectedVoice.toLowerCase()}-${Date.now()}.wav`;
+      const finalBuffer = Buffer.from(wavBase64, "base64");
+      audioCache.set(audioId, {
+        buffer: finalBuffer,
+        mimeType: finalMime,
+        filename: downloadFilename,
+        timestamp: Date.now(),
+      });
+
       return res.json({
+        audioId,
+        downloadUrl: `/api/audio/download/${audioId}`,
+        downloadFilename,
         audioData: wavBase64,
         rawPcmData: rawBase64,
         mimeType: finalMime,
@@ -285,6 +311,42 @@ async function startServer() {
         error: parsed.message,
         isAuthError: parsed.isAuthError,
       });
+    }
+  });
+
+  // Direct Audio File Download by cached ID
+  app.get("/api/audio/download/:id", (req, res) => {
+    const item = audioCache.get(req.params.id);
+    if (!item) {
+      return res.status(404).send("فایل صوتی یافت نشد یا منقضی شده است.");
+    }
+    const safeFilename = item.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+    res.setHeader("Content-Type", item.mimeType || "audio/wav");
+    res.setHeader("Content-Disposition", `attachment; filename="${safeFilename}"; filename*=UTF-8''${encodeURIComponent(item.filename)}`);
+    res.setHeader("Content-Length", item.buffer.length);
+    res.send(item.buffer);
+  });
+
+  // Download custom audio data stream via POST (useful for client synthesized audio)
+  app.post("/api/audio/download-stream", (req, res) => {
+    try {
+      const { base64Data, filename = "persian-tts-voice.wav" } = req.body;
+      if (!base64Data) {
+        return res.status(400).send("محتوای صوتی ارسال نشده است.");
+      }
+      let cleaned = String(base64Data).trim();
+      if (cleaned.includes(",")) cleaned = cleaned.split(",")[1];
+      cleaned = cleaned.replace(/[^A-Za-z0-9+/=]/g, "");
+      while (cleaned.length % 4 !== 0) cleaned += "=";
+      const buffer = Buffer.from(cleaned, "base64");
+      const safeFilename = filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+
+      res.setHeader("Content-Type", "audio/wav");
+      res.setHeader("Content-Disposition", `attachment; filename="${safeFilename}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+      res.setHeader("Content-Length", buffer.length);
+      res.send(buffer);
+    } catch (err: any) {
+      res.status(500).send("خطا در ایجاد جریان دانلود: " + err?.message);
     }
   });
 

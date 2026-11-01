@@ -27,6 +27,15 @@ export interface AudioHistoryItem {
   mimeType: string;
   createdAt: string;
   duration?: number;
+  downloadUrl?: string;
+}
+
+export interface AudioSaveFeedback {
+  success: boolean;
+  message: string;
+  type: "success" | "info" | "warning" | "error";
+  filename?: string;
+  url?: string;
 }
 
 export interface PresetCategory {

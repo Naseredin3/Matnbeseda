@@ -28,10 +28,10 @@ var import_dotenv = __toESM(require("dotenv"), 1);
 var import_genai = require("@google/genai");
 var import_vite = require("vite");
 import_dotenv.default.config();
-function getGeminiClient() {
-  const apiKey = process.env.GEMINI_API_KEY;
+function getGeminiClient(customApiKey) {
+  const apiKey = customApiKey && customApiKey.trim() || process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) {
-    throw new Error("GEMINI_API_KEY environment variable is not configured");
+    throw new Error("\u06A9\u0644\u06CC\u062F \u062F\u0633\u062A\u0631\u0633\u06CC Gemini API \u062A\u0646\u0638\u06CC\u0645 \u0646\u0634\u062F\u0647 \u0627\u0633\u062A. \u0644\u0637\u0641\u0627\u064B \u06A9\u0644\u06CC\u062F \u062F\u0627\u0626\u0645\u06CC \u062E\u0648\u062F \u0631\u0627 \u062F\u0631 \u0628\u062E\u0634 \u062A\u0646\u0638\u06CC\u0645\u0627\u062A \u0648\u0627\u0631\u062F \u0646\u0645\u0627\u06CC\u06CC\u062F \u06CC\u0627 \u062F\u0631 \u0645\u062A\u063A\u06CC\u0631 \u0645\u062D\u06CC\u0637\u06CC GEMINI_API_KEY \u0642\u0631\u0627\u0631 \u062F\u0647\u06CC\u062F.");
   }
   return new import_genai.GoogleGenAI({
     apiKey,
@@ -92,24 +92,64 @@ function parseGeminiError(err) {
     message: errMsg || "\u062E\u0637\u0627 \u062F\u0631 \u0628\u0631\u0642\u0631\u0627\u0631\u06CC \u0627\u0631\u062A\u0628\u0627\u0637 \u0628\u0627 \u0633\u0631\u0648\u0631 \u0647\u0648\u0634 \u0645\u0635\u0646\u0648\u0639\u06CC"
   };
 }
+var audioCache = /* @__PURE__ */ new Map();
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, item] of audioCache.entries()) {
+    if (now - item.timestamp > 72e5) {
+      audioCache.delete(id);
+    }
+  }
+}, 6e5);
 async function startServer() {
   const app = (0, import_express.default)();
   const PORT = 3e3;
   app.use(import_express.default.json({ limit: "15mb" }));
-  app.get("/api/health", (_req, res) => {
+  app.get("/api/health", (req, res) => {
+    const customKey = req.headers["x-gemini-key"] || req.query.key;
+    const hasCustomKey = !!(customKey && customKey.trim());
+    const hasEnvKey = !!process.env.GEMINI_API_KEY?.trim();
     res.json({
       status: "ok",
-      hasKey: !!process.env.GEMINI_API_KEY,
+      hasKey: hasCustomKey || hasEnvKey,
+      isCustomKeyProvided: hasCustomKey,
+      hasEnvKey,
       timestamp: (/* @__PURE__ */ new Date()).toISOString()
     });
   });
+  app.post("/api/verify-key", async (req, res) => {
+    try {
+      const apiKey = req.body?.apiKey || req.headers["x-gemini-key"] || process.env.GEMINI_API_KEY;
+      if (!apiKey || !apiKey.trim()) {
+        return res.status(400).json({ valid: false, error: "\u06A9\u0644\u06CC\u062F API \u0648\u0627\u0631\u062F \u0646\u0634\u062F\u0647 \u0627\u0633\u062A." });
+      }
+      const client = new import_genai.GoogleGenAI({
+        apiKey: apiKey.trim(),
+        httpOptions: { headers: { "User-Agent": "aistudio-build-verify" } }
+      });
+      await client.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: [{ parts: [{ text: "ping" }] }]
+      });
+      return res.json({ valid: true, message: "\u06A9\u0644\u06CC\u062F \u062F\u0627\u0626\u0645\u06CC \u0645\u0639\u062A\u0628\u0631 \u0627\u0633\u062A \u0648 \u0628\u0627 \u0645\u0648\u0641\u0642\u06CC\u062A \u062A\u0627\u06CC\u06CC\u062F \u0634\u062F." });
+    } catch (err) {
+      console.warn("Key verification failed:", err?.message);
+      const parsed = parseGeminiError(err);
+      return res.status(parsed.status).json({
+        valid: false,
+        error: parsed.message,
+        isAuthError: parsed.isAuthError
+      });
+    }
+  });
   app.post("/api/tts", async (req, res) => {
     try {
-      const { text, voiceName = "Kore", style = "natural", speed = "normal" } = req.body;
+      const { text, voiceName = "Kore", style = "natural", speed = "normal", apiKey: bodyKey } = req.body;
       if (!text || typeof text !== "string" || !text.trim()) {
         return res.status(400).json({ error: "\u0645\u062A\u0646 \u0648\u0627\u0631\u062F \u0634\u062F\u0647 \u062E\u0627\u0644\u06CC \u0627\u0633\u062A" });
       }
-      const ai = getGeminiClient();
+      const clientKey = req.headers["x-gemini-key"] || bodyKey;
+      const ai = getGeminiClient(clientKey);
       let styleInstruction = "\u0628\u0627 \u0628\u06CC\u0627\u0646\u06CC \u06A9\u0627\u0645\u0644\u0627\u064B \u0633\u0644\u06CC\u0633\u060C \u0631\u0648\u0627\u0646\u060C \u0631\u0633\u0627 \u0648 \u0637\u0628\u06CC\u0639\u06CC \u0628\u0647 \u0632\u0628\u0627\u0646 \u0641\u0627\u0631\u0633\u06CC";
       if (style === "poetic") {
         styleInstruction = "\u0628\u0627 \u0628\u06CC\u0627\u0646\u06CC \u0627\u062D\u0633\u0627\u0633\u06CC\u060C \u0645\u0648\u0632\u0648\u0646\u060C \u0627\u062F\u06CC\u0628\u0627\u0646\u0647 \u0648 \u0641\u0627\u062E\u0631 \u0628\u0647 \u0632\u0628\u0627\u0646 \u0641\u0627\u0631\u0633\u06CC";
@@ -195,7 +235,19 @@ ${text.trim()}`;
         wavBase64 = wavBuffer.toString("base64");
         finalMime = "audio/wav";
       }
+      const audioId = `tts_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const downloadFilename = `persian-voice-${selectedVoice.toLowerCase()}-${Date.now()}.wav`;
+      const finalBuffer = Buffer.from(wavBase64, "base64");
+      audioCache.set(audioId, {
+        buffer: finalBuffer,
+        mimeType: finalMime,
+        filename: downloadFilename,
+        timestamp: Date.now()
+      });
       return res.json({
+        audioId,
+        downloadUrl: `/api/audio/download/${audioId}`,
+        downloadFilename,
         audioData: wavBase64,
         rawPcmData: rawBase64,
         mimeType: finalMime,
@@ -211,13 +263,45 @@ ${text.trim()}`;
       });
     }
   });
+  app.get("/api/audio/download/:id", (req, res) => {
+    const item = audioCache.get(req.params.id);
+    if (!item) {
+      return res.status(404).send("\u0641\u0627\u06CC\u0644 \u0635\u0648\u062A\u06CC \u06CC\u0627\u0641\u062A \u0646\u0634\u062F \u06CC\u0627 \u0645\u0646\u0642\u0636\u06CC \u0634\u062F\u0647 \u0627\u0633\u062A.");
+    }
+    const safeFilename = item.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+    res.setHeader("Content-Type", item.mimeType || "audio/wav");
+    res.setHeader("Content-Disposition", `attachment; filename="${safeFilename}"; filename*=UTF-8''${encodeURIComponent(item.filename)}`);
+    res.setHeader("Content-Length", item.buffer.length);
+    res.send(item.buffer);
+  });
+  app.post("/api/audio/download-stream", (req, res) => {
+    try {
+      const { base64Data, filename = "persian-tts-voice.wav" } = req.body;
+      if (!base64Data) {
+        return res.status(400).send("\u0645\u062D\u062A\u0648\u0627\u06CC \u0635\u0648\u062A\u06CC \u0627\u0631\u0633\u0627\u0644 \u0646\u0634\u062F\u0647 \u0627\u0633\u062A.");
+      }
+      let cleaned = String(base64Data).trim();
+      if (cleaned.includes(",")) cleaned = cleaned.split(",")[1];
+      cleaned = cleaned.replace(/[^A-Za-z0-9+/=]/g, "");
+      while (cleaned.length % 4 !== 0) cleaned += "=";
+      const buffer = Buffer.from(cleaned, "base64");
+      const safeFilename = filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+      res.setHeader("Content-Type", "audio/wav");
+      res.setHeader("Content-Disposition", `attachment; filename="${safeFilename}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+      res.setHeader("Content-Length", buffer.length);
+      res.send(buffer);
+    } catch (err) {
+      res.status(500).send("\u062E\u0637\u0627 \u062F\u0631 \u0627\u06CC\u062C\u0627\u062F \u062C\u0631\u06CC\u0627\u0646 \u062F\u0627\u0646\u0644\u0648\u062F: " + err?.message);
+    }
+  });
   app.post("/api/persian/polish", async (req, res) => {
     try {
-      const { text, mode = "fluency" } = req.body;
+      const { text, mode = "fluency", apiKey: bodyKey } = req.body;
       if (!text || typeof text !== "string" || !text.trim()) {
         return res.status(400).json({ error: "\u0645\u062A\u0646 \u062E\u0627\u0644\u06CC \u0627\u0633\u062A" });
       }
-      const ai = getGeminiClient();
+      const clientKey = req.headers["x-gemini-key"] || bodyKey;
+      const ai = getGeminiClient(clientKey);
       let systemPrompt = "";
       if (mode === "diacritics") {
         systemPrompt = "\u0645\u062A\u0646 \u0641\u0627\u0631\u0633\u06CC \u062F\u0627\u062F\u0647 \u0634\u062F\u0647 \u0631\u0627 \u0628\u0627 \u0627\u0639\u0631\u0627\u0628\u200C\u06AF\u0630\u0627\u0631\u06CC \u0648 \u062D\u0631\u06A9\u062A\u200C\u06AF\u0630\u0627\u0631\u06CC \u0635\u062D\u06CC\u062D (\u0641\u062A\u062D\u0647\u060C \u06A9\u0633\u0631\u0647\u060C \u0636\u0645\u0647\u060C \u062A\u0634\u062F\u06CC\u062F\u060C \u062A\u0646\u0648\u06CC\u0646 \u0648 \u0633\u06A9\u0648\u0646) \u06A9\u0627\u0645\u0644 \u06A9\u0646 \u062A\u0627 \u0645\u0648\u062A\u0648\u0631 \u062A\u0628\u062F\u06CC\u0644 \u0645\u062A\u0646 \u0628\u0647 \u0635\u0648\u062A \u0628\u062A\u0648\u0627\u0646\u062F \u06A9\u0644\u0645\u0627\u062A \u0631\u0627 \u062F\u0642\u06CC\u0642\u0627\u064B \u062F\u0631\u0633\u062A \u0648 \u0628\u062F\u0648\u0646 \u0627\u0628\u0647\u0627\u0645 \u062A\u0644\u0641\u0638 \u06A9\u0646\u062F. \u0641\u0642\u0637 \u0645\u062A\u0646 \u0627\u0639\u0631\u0627\u0628\u200C\u06AF\u0630\u0627\u0631\u06CC \u0634\u062F\u0647 \u0631\u0627 \u0628\u0631\u06AF\u0631\u062F\u0627\u0646 \u0628\u062F\u0648\u0646 \u0647\u06CC\u0686 \u062A\u0648\u0636\u06CC\u062D \u0627\u0636\u0627\u0641\u0647.";

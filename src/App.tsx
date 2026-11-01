@@ -176,7 +176,7 @@ export default function App() {
 
       // Add to history and persistent storage
       const newItem: AudioHistoryItem = {
-        id: Date.now().toString(),
+        id: data.audioId || Date.now().toString(),
         text: text.trim(),
         voiceName: voice,
         style: selectedStyle,
@@ -188,6 +188,7 @@ export default function App() {
           minute: "2-digit",
         }),
         duration: data.durationEstimateSec,
+        downloadUrl: data.downloadUrl,
       };
 
       await saveAudioHistoryItem(newItem);
